@@ -10,6 +10,7 @@ imagelist = []
 currentImage = 0
 millis = 0
 intersects = []
+errorFrames = 0
 for filename in glob.glob(overlayAnimDir):
     imagelist.append(cv2.imread(filename))
 
@@ -20,7 +21,8 @@ def OverlayImage (imgbg, imgfg):
     return imgbg
 
 def Overlay3DPoints (img):
-    # Overlay 3D points (not used)
+    # Overlay 3D points
+    # UNUSED
     Pts2D = np.ones((6, 3))
     Pts2D[:,1] = 20
     Pts2D[:,2] = range(0, 6, 10)
@@ -98,17 +100,24 @@ def FindBestLines(img):
     # Finds potential lines in the image
     # Filters to 4 lines best meeting several basic constraints
     thresh = 15
-    lines = cv2.HoughLines(img, 1, np.pi/45, thresh)
-    if lines is None:
-        linesFiltered = lines
-    else:
-        linesFiltered = FilterBestLines(lines)
+    linesFiltered = np.ndarray(shape=(0, 1, 2))
+    cv2.imwrite('edgeFrame-start.png', img)
+    for i in range(0, 4):
+        lines = cv2.HoughLines(img, 1, np.pi/45, thresh)
+        if lines is None:
+            return (lines, lines)
+        else:
+            linesFiltered = np.append(linesFiltered, np.expand_dims(lines[0], axis=0), axis = 0)
+            img = DrawLinesOnImage(img, np.expand_dims(lines[0], axis=0), 5, (0, 0, 0))
+            cv2.imwrite('edgeFrame-' + str(i) + '.png', img)
 
+    exit()
     return (linesFiltered, lines)
 
 
 def FilterBestLines(lines):
     # Given a number of lines, finds the most promising 4
+    # UNUSED
     linesFiltered = np.ndarray(shape=(0, 1, 2))
 
     for line in lines:
@@ -120,22 +129,25 @@ def FilterBestLines(lines):
     return linesFiltered
 
 def HasSimilarLines(line, fLines):
-    # Checks whether there are lines in fLines very similar to line
+    # Checks whether there are lines in fLines at similar distance but slightly different angle
+    # UNUSED
     if len(fLines) == 0:
         return False
 
     rhoRange = 20
-    thetaRange = np.pi / 4
+    thetaRange = np.pi / 8
 
     rho = line[0][0]
     theta = line[0][1]
     for fLine in fLines:
         fRho = fLine[0][0]
         fTheta = fLine[0][1]
+        if theta == fTheta:
+            continue
         #print "Theta: %s fTheta: %s Rho: %s fRho: %s" % (theta, fTheta, rho, fRho)
-        if (fRho - rhoRange) <= rho <= (fRho + rhoRange):
-            for i in range(-1, 3):
-                if (fTheta - thetaRange + i * np.pi) <= theta <= (fTheta +thetaRange + i * np.pi):
+        for i in range(-1, 3):
+            if (fTheta - thetaRange - i * np.pi) <= theta <= (fTheta + thetaRange + i * np.pi):
+                if (fRho - rhoRange) <= rho <= (fRho + rhoRange):
                     return True
     return False
 
@@ -210,7 +222,7 @@ def ValidQuadrilateral(intersects):
 
 def SimilarOpposingSides(intersects):
     # Check if opposing sides are of similar distance
-    tolerance = 0.5
+    tolerance = 0.1
     distLeft = IntersectDistance(intersects[0], intersects[3])
     distTop = IntersectDistance(intersects[0], intersects[1])
     distRight = IntersectDistance(intersects[1], intersects[2])
@@ -264,7 +276,7 @@ def SortIntersects(its):
     sortedIntersects = np.vstack((sortedIntersects, topLeft, topRight, bottomRight, bottomLeft))
     return sortedIntersects
 
-def DrawLinesOnImage(img, lines, width):
+def DrawLinesOnImage(img, lines, width, color = (255, 255, 255)):
     # Plot lines on an image
     
     if lines != None:
@@ -280,7 +292,7 @@ def DrawLinesOnImage(img, lines, width):
             y1 = int(y0 + 1000 * a)
             x2 = int(x0 - 1000 * (-b))
             y2 = int(y0 - 1000 * a)
-            cv2.line(img, (x1, y1),(x2, y2),(255, 255, 255), width)
+            cv2.line(img, (x1, y1),(x2, y2), color, width)
     return img
 
 def DrawIntersectsOnImage(img, intersects, size, width):
@@ -291,7 +303,8 @@ def DrawIntersectsOnImage(img, intersects, size, width):
     return img
 
 def DilateErode(img):
-    # Reduces noise (not used)
+    # Reduces noise
+    # UNUSED
     size = 5
     img = cv2.erode(img, np.ones((size, size)))
     img = cv2.dilate(img, np.ones((size, size)))
@@ -319,21 +332,24 @@ def GetFrameFromVideo():
     return frameResized
 
 while(True):
-    #time.sleep(1)
+    
     frame = GetFrameFromVideo()
     filteredFrame, mask = FilterColor(frame)
+    mask = DilateErode(mask)
     edgesImg = GetEdges(mask)
     linesBest, linesAll = FindBestLines(edgesImg)
     intersects = GetIntersects(linesBest, frame, intersects)
-    filteredFrame = DrawIntersectsOnImage(filteredFrame, intersects, 10, 2)
+
+    #filteredFrame = DrawIntersectsOnImage(filteredFrame, intersects, 10, 2)
     overlayRaw, currentImage = NextOverlay(imagelist, currentImage)
     overlay = PerspectiveTransform(overlayRaw, intersects, frame)
     output = OverlayImage(frame, overlay)
+    #output = OverlayFPS(output)
     
     debugFrame = np.copy(filteredFrame)
     debugFrame = DrawLinesOnImage(debugFrame, linesAll, 1)
     debugFrame = DrawLinesOnImage(debugFrame, linesBest, 3)
-    debugFrame = OverlayFPS(debugFrame)
+    #debugFrame = OverlayFPS(debugFrame)
 
     # Display the resulting frame
     #cv2.imshow('filteredFrame', filteredFrame)
@@ -343,8 +359,8 @@ while(True):
     #cv2.imshow('mask', mask)
     #cv2.imshow('strongmask', strongMask)
     #cv2.imshow('lines',linesimg)
-    #if cv2.waitKey(1) & 0xFF == ord('q'):
-    #    break
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
 # When everything done, release the capture
 cap.release()
