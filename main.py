@@ -139,7 +139,7 @@ def HasSimilarLines(line, fLines):
                     return True
     return False
 
-def GetIntersects(lines, img):
+def GetIntersects(lines, img, oldIntersects):
     # Given 4 lines, finds the best intersects
     intersects = np.ndarray(shape=(0, 2))
 
@@ -156,10 +156,12 @@ def GetIntersects(lines, img):
                     intersects = np.vstack((intersects, intersectCandidate))
 
     intersects = ValidQuadrilateral(intersects)
+    if intersects == None:
+        intersects = oldIntersects
     return intersects
 
 def GetIntersectFromPolar(rho1, theta1, rho2, theta2, img):
-    # Find intersections of lines described by polar coordinates
+    # Find intersections on image of lines described by polar coordinates
     if rho1 == rho2 and theta1 == theta2:
         return None    
     a = np.array([[np.cos(theta1), np.sin(theta1)], [np.cos(theta2), np.sin(theta2)]])
@@ -174,7 +176,7 @@ def GetIntersectFromPolar(rho1, theta1, rho2, theta2, img):
 
 def IsOnImage(intersect, img):
     # Check if a point falls on (or just outside of) the image
-    blur = 5
+    blur = 10
     y = img.shape[0]
     x = img.shape[1]
     if(intersect[0] > (-blur) and intersect[0] < (x + blur) and intersect[1] > (-blur) and intersect[1] < (y + blur)):
@@ -183,47 +185,73 @@ def IsOnImage(intersect, img):
 
 def ValidQuadrilateral(intersects):
     # Given a set of intersects, check if we have 4 good ones, return them if so
-    minDist = 10
-    filteredIntersects = np.ndarray(shape=(0, 2))
 
+    # Less than 4 intersects on image: return none
     if (len(intersects) < 4):
+        #print("Less than 4")
         return None
 
-    # Filter out if one point is too far out
+    # More than 4 intersects: use the 4 closest
+    if (len(intersects) > 4):
+        intersects = ClosestIntersects(intersects)
+
+    # Sort, if sort fails (e.g. 3 intersects in a line): return none
+    intersects = SortIntersects(intersects)
+    if (len(intersects) < 4):
+        #print("Unsortable")
+        return None 
+
+    # Check if opposing sides are of similar distance
+    if not SimilarOpposingSides(intersects):
+        #print("Dissimilar")
+        return None
+
+    return intersects
+
+def SimilarOpposingSides(intersects):
+    # Check if opposing sides are of similar distance
+    tolerance = 0.5
+    distLeft = IntersectDistance(intersects[0], intersects[3])
+    distTop = IntersectDistance(intersects[0], intersects[1])
+    distRight = IntersectDistance(intersects[1], intersects[2])
+    distBottom = IntersectDistance(intersects[2], intersects[3])
+    meanHeight = (distLeft + distRight) / 2
+    meanWidth = (distTop + distBottom) / 2
+    minWidth = meanWidth * (1 - tolerance)
+    maxWidth = meanWidth * (1 + tolerance)
+    minHeight = meanHeight * (1 - tolerance)
+    maxHeight = meanHeight * (1 + tolerance)
+    if(distLeft < minHeight or distLeft > maxHeight or distRight < minHeight or distRight > maxHeight):
+        #print("DistLeft: %s DistRight: %s minHeight: %s maxHeight: %s ") % (distLeft, distRight, minHeight, maxHeight)
+        return False
+    if(distTop < minWidth or distTop > maxWidth or distBottom < minWidth or distBottom > maxWidth):
+        #print("DistTop: %s DistBottom: %s minWidth: %s maxWidth: %s ") % (distTop, distBottom, minWidth, maxWidth)
+        return False
+    
+    return True
+
+def IntersectDistance(intersect1, intersect2):
+    dist = np.sqrt(np.square(intersect1[0] - intersect2[0]) + np.square(intersect1[1] - intersect2[1]))
+    return dist
+
+def ClosestIntersects(intersects):
+    # For more than 5 intersects, get the 4 closest to each other
+    dists = []
+    filteredIntersects = np.ndarray(shape=(0, 2))
     xmean = np.mean(intersects[:,0])
     ymean = np.mean(intersects[:,1])
-    xstd = np.std(intersects[:,0])
-    ystd = np.std(intersects[:,1])
-    for intersect in intersects:
-        x = intersect[0]
-        y = intersect[1]
-        if (x >= (xmean - 2*xstd) and x <= (xmean + 2*xstd) and y >= (ymean - 2*ystd) and y <= (ymean + 2*ystd)):
-            filteredIntersects = np.vstack((filteredIntersects, intersect))
-
-    # Filter out if two points are too near
-    intersectCandidates = np.copy(filteredIntersects)
-    filteredIntersects = np.ndarray(shape=(0, 2))
-    for i in range(len(intersectCandidates)):
-        badCandidate = False
-        for j in range(i + 1, len(intersectCandidates)):  
-            i1x = intersectCandidates[i][0]
-            i1y = intersectCandidates[i][1]
-            i2x = intersectCandidates[j][0]
-            i2y = intersectCandidates[j][1]
-            if((i2x - minDist) <= i1x <= (i2x + minDist) and (i2y - minDist) <= i1y <= (i2y + minDist)):
-                badCandidate = True
-        if(badCandidate == False):
-            filteredIntersects = np.vstack((filteredIntersects, intersectCandidates[i]))
-
-    if (len(filteredIntersects) != 4):
-        return None
-
-    filteredIntersects = SortIntersects(filteredIntersects)
-
+    for i in range(0, len(intersects)):
+        x = intersects[i][0]
+        y = intersects[i][1]
+        dists.append(np.sqrt(np.square(xmean - x) + np.square(ymean - y)))
+    for i in range(0, 4):
+        idx = dists.index(min(dists))
+        filteredIntersects = np.vstack((filteredIntersects, intersects[idx]))
+        dists[idx] = float("inf")
     return filteredIntersects
 
 def SortIntersects(its):
-    # Sort intersects top-let, top-right, bottom-right, bottom-left
+    # Sort intersects top-left, top-right, bottom-right, bottom-left
     sortedIntersects = np.ndarray(shape=(0, 2))
 
     topIts = its[its[:,0] < np.median(its[:,0])]
@@ -234,11 +262,9 @@ def SortIntersects(its):
     bottomRight = bottomIts[bottomIts[:,1] > np.mean(bottomIts[:,1])]
     
     sortedIntersects = np.vstack((sortedIntersects, topLeft, topRight, bottomRight, bottomLeft))
-    
     return sortedIntersects
 
-
-def LinesOnImage(img, lines, width):
+def DrawLinesOnImage(img, lines, width):
     # Plot lines on an image
     
     if lines != None:
@@ -255,10 +281,9 @@ def LinesOnImage(img, lines, width):
             x2 = int(x0 - 1000 * (-b))
             y2 = int(y0 - 1000 * a)
             cv2.line(img, (x1, y1),(x2, y2),(255, 255, 255), width)
-
     return img
 
-def IntersectsOnImage(img, intersects, size, width):
+def DrawIntersectsOnImage(img, intersects, size, width):
     # Plot the intersects on an image
     if intersects != None:
         for intersect in intersects:
@@ -273,7 +298,7 @@ def DilateErode(img):
     return img
 
 def PerspectiveTransform(img, its, fullimg):
-    # Transforms an image based on quadrialateral corners (its)
+    # Transforms an image based on quadrilateral corners (its)
     if len(its) < 4:
         M = SampleM()
     else:
@@ -287,32 +312,34 @@ def PerspectiveTransform(img, its, fullimg):
     out = MTransform(img, M, cols, rows)
     return out
 
+def GetFrameFromVideo():
+    ret, frame = cap.read()
+    frameResized = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
+    # rows, cols, clrs = frame.shape
+    return frameResized
 
 while(True):
-    ret, frame = cap.read()
-    frame = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
-    rows, cols, clrs = frame.shape
+    #time.sleep(1)
+    frame = GetFrameFromVideo()
     filteredFrame, mask = FilterColor(frame)
-    #strongMask = DilateErode(mask)
     edgesImg = GetEdges(mask)
     linesBest, linesAll = FindBestLines(edgesImg)
-    filteredFrame = LinesOnImage(filteredFrame, linesAll, 1)
-    filteredFrame = LinesOnImage(filteredFrame, linesBest, 3)
-    newIntersects = GetIntersects(linesBest, frame)
-    if newIntersects != None:
-        intersects = newIntersects
-    filteredFrame = IntersectsOnImage(filteredFrame, intersects, 10, 2)
-    #frame = Overlay3DPoints(frame)
-
+    intersects = GetIntersects(linesBest, frame, intersects)
+    filteredFrame = DrawIntersectsOnImage(filteredFrame, intersects, 10, 2)
     overlayRaw, currentImage = NextOverlay(imagelist, currentImage)
     overlay = PerspectiveTransform(overlayRaw, intersects, frame)
+    output = OverlayImage(frame, overlay)
     
-    frameWithOverlay = OverlayImage(frame, overlay)
-    frameWithOverlay = OverlayFPS(frameWithOverlay)
+    debugFrame = np.copy(filteredFrame)
+    debugFrame = DrawLinesOnImage(debugFrame, linesAll, 1)
+    debugFrame = DrawLinesOnImage(debugFrame, linesBest, 3)
+    debugFrame = OverlayFPS(debugFrame)
 
     # Display the resulting frame
-    cv2.imshow('filteredFrame', filteredFrame)
-    cv2.imshow('output', frameWithOverlay)
+    #cv2.imshow('filteredFrame', filteredFrame)
+    #cv2.imshow('edgesImg', edgesImg)
+    cv2.imshow('output', output)
+    cv2.imshow('debugFrame', debugFrame)
     #cv2.imshow('mask', mask)
     #cv2.imshow('strongmask', strongMask)
     #cv2.imshow('lines',linesimg)
