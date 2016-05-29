@@ -348,15 +348,11 @@ def PerspectiveTransform(img, its, fullImg):
         imgy = img.shape[0]
         imgx = img.shape[1]
         imgRect = np.float32([[0,0],[0,imgx],[imgy,imgx],[imgy,0]])
-        y1 = its[0][0]
-        x1 = its[0][1]
-        y2 = its[1][0]
-        x2 = its[1][1]
-        y3 = its[2][0]
-        x3 = its[2][1]
-        y4 = its[3][0]
-        x4 = its[3][1]
-        intersectRect = np.float32([[y1, x1], [y2, x2], [y3, x3], [y4, x4]])
+        topLeft = [its[0][0], its[0][1]]
+        topRight = [its[1][0], its[1][1]]
+        bottomRight = [its[2][0], its[2][1]]
+        bottomLeft = [its[3][0], its[3][1]]
+        intersectRect = np.float32([topLeft, topRight, bottomRight, bottomLeft])
         M = cv2.getPerspectiveTransform(imgRect,intersectRect)
 
     out = MTransform(img, M, fullImg)
