@@ -4,39 +4,31 @@ import glob
 import time
 import sys
 
-cap = cv2.VideoCapture(0)
+# Parameters
 overlayAnimDir = './images/globe_png/*'
+debugMode = False
+showAllDebugViews = False
+useRhoThetaLineMethod = False
+
+# Initialization of globals
+cap = cv2.VideoCapture(0)
 imagelist = []
 currentImage = 0
 millis = 0
 intersects = []
 errorFrames = 0
+frameMillis = 0
+globalCounter = 0
+globalTimes = []
 for filename in glob.glob(overlayAnimDir):
     imagelist.append(cv2.imread(filename))
 
 
 def OverlayImage (imgbg, imgfg):
     # Overlay partly transparant image over another
-    imgbg[imgfg > 0] = imgfg[imgfg > 0]
+    nonTransPix = imgfg > 0
+    imgbg[nonTransPix] = imgfg[nonTransPix]
     return imgbg
-
-def Overlay3DPoints (img):
-    # Overlay 3D points
-    # UNUSED
-    Pts2D = np.ones((6, 3))
-    Pts2D[:,1] = 20
-    Pts2D[:,2] = range(0, 6, 10)
-    r = np.identity(3) # rotation vector
-    t = np.array([0,0,0], np.float) # translation vector
-    fx = fy = 1.0
-    cx = cy = 0.0
-    cameraMatrix = np.array([[fx, 0, cx],[0, fy, cy],[0, 0, 1]])
-    Pts3D = cv2.projectPoints(Pts2D, r, v, cameraMatrix, None)
-    for n in Pts3D:
-        #Pt3Dx = int(Pts3D[0][n][0][0])
-        #Pt3Dy = int(Pts3D[0][n][0][1])
-        cv2.circle(img, (Pt3Dx, Pt3Dy), 3, (200, 200, 200))
-    return img
 
 def NextOverlay (imagelist, currentImage):
     # Retrieve next overlay image from image list for animation
@@ -46,41 +38,38 @@ def NextOverlay (imagelist, currentImage):
         currentImage = 0
     return overlay, currentImage
 
-def MTransform(img, M, cols, rows):
+def MTransform(img, M, fullImg):
     # Transform image based on transformation matrix M
-    imgTransform = cv2.warpPerspective(img,M,(cols,rows))
+    rows, cols, clrs = fullImg.shape
+    imgTransform = cv2.warpPerspective(img, M, (cols, rows))
     return imgTransform
 
 def SampleM():
-    # Manually define a transformation matrix
+    # Manually define a transformation matrix as initial state
     sx = 0.25
     sy = 0.25
     tx = 0
     ty = 0
-    M = np.float32([[sx,0,tx],[0,sy,ty],[0,0,1]])
-    #M = np.float32([[sx,0.1,tx],[0.5,sy,ty],[0.00001,-0.0004,1]])
+    M = np.float32([[sx, 0, tx],[0, sy, ty],[0, 0, 1]])
     return M
 
 def OverlayFPS(img):
     # Overlay FPS counter on image
     global millis
+    color = (255, 255, 255)
+    position = (0, 15)
+    size = 0.5
     fps = round(1 / (time.time() * 1000 - millis) * 1000)
     millis = time.time() * 1000
     fps_text = str(int(fps)) + " FPS"
-    cv2.putText(img, fps_text, (0,15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255))
+    cv2.putText(img, fps_text, position, cv2.FONT_HERSHEY_SIMPLEX, size, color)
     return img
 
 def FilterColor(img):
     # Filter image for specific hue-saturation-value range
     imgHSV = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     
-    # Conservative:
-    #MinHSV = np.array([207.9/255*180, 106.4, 91.2])
-    #MaxHSV = np.array([250.4/255*180, 206.4, 255])
-    # Wider:
-    #MinHSV = np.array([207.9/255*180, 97.2, 91.2])
-    #MaxHSV = np.array([250.4/255*180, 207.6, 255])
-    # Widest:
+    # Pink Post-its bounding box:
     MinHSV = np.array([203.5/255*180, 83.3, 69.6])
     MaxHSV = np.array([254.9/255*180, 221.4, 255])
 
@@ -88,36 +77,66 @@ def FilterColor(img):
     mask = cv2.inRange(imgHSV, MinHSV, MaxHSV)
 
     # AND mask (bitwise) applied to original image
-    imgMaskedBGR = cv2.bitwise_and(img, img, mask = mask)
+    if debugMode:
+        imgMaskedBGR = cv2.bitwise_and(img, img, mask = mask)
+    else:
+        imgMaskedBGR = None
+
     return imgMaskedBGR, mask
 
 def GetEdges(img):
     # Get edges based on filtered input image
-    edges = cv2.Canny(img,100,200)
+    thresLow = 100
+    thresHigh = 200
+    edges = cv2.Canny(img, thresLow, thresHigh)
     return edges
 
 def FindBestLines(img):
     # Finds potential lines in the image
-    # Filters to 4 lines best meeting several basic constraints
     thresh = 15
+    rhoSize = 1
+    thetaSize = np.pi / 45
+    lines = cv2.HoughLines(img, rhoSize, thetaSize, thresh)
+    allLines = lines
+
+    # Pick method for line finding
+    if useRhoThetaLineMethod:
+        linesFiltered = FindLinesDissimilar(lines)
+    else:
+        linesFiltered = FindLinesIterative(lines, img, rhoSize, thetaSize, thresh)
+
+    return (linesFiltered, allLines)
+
+def FindLinesIterative(lines, img, rhoSize, thetaSize, thresh):
+    # Iterative Hough method for finding the best lines
     linesFiltered = np.ndarray(shape=(0, 1, 2))
-    cv2.imwrite('edgeFrame-start.png', img)
+    imgEdit = np.copy(img)
     for i in range(0, 4):
-        lines = cv2.HoughLines(img, 1, np.pi/45, thresh)
         if lines is None:
-            return (lines, lines)
+            if debugMode:
+                print("No lines found")
+            return lines
         else:
-            linesFiltered = np.append(linesFiltered, np.expand_dims(lines[0], axis=0), axis = 0)
-            img = DrawLinesOnImage(img, np.expand_dims(lines[0], axis=0), 5, (0, 0, 0))
-            cv2.imwrite('edgeFrame-' + str(i) + '.png', img)
+            line = lines[0]
+            lineExpDim = np.expand_dims(line, axis=0)
+            linesFiltered = np.append(linesFiltered, lineExpDim, axis = 0)
+            imgEdit = RemoveLine(imgEdit, line)
+        lines = cv2.HoughLines(imgEdit, rhoSize, thetaSize, thresh)
+    return linesFiltered
 
-    exit()
-    return (linesFiltered, lines)
+def RemoveLine(img, line):
+    # Removes the detected line from edge image
+    color = (0, 0, 0)
+    width = 3
+    lineExpDim = np.expand_dims(line, axis=0)
+    img = DrawLinesOnImage(img, lineExpDim, width, color)
+    return img
 
+def FindLinesDissimilar(lines):
+    # Similar rho-theta method for finding the best lines
+    if lines == None:
+        return None
 
-def FilterBestLines(lines):
-    # Given a number of lines, finds the most promising 4
-    # UNUSED
     linesFiltered = np.ndarray(shape=(0, 1, 2))
 
     for line in lines:
@@ -129,8 +148,7 @@ def FilterBestLines(lines):
     return linesFiltered
 
 def HasSimilarLines(line, fLines):
-    # Checks whether there are lines in fLines at similar distance but slightly different angle
-    # UNUSED
+    # Checks whether there are lines in fLines with similar theta / rho
     if len(fLines) == 0:
         return False
 
@@ -144,7 +162,6 @@ def HasSimilarLines(line, fLines):
         fTheta = fLine[0][1]
         if theta == fTheta:
             continue
-        #print "Theta: %s fTheta: %s Rho: %s fRho: %s" % (theta, fTheta, rho, fRho)
         for i in range(-1, 3):
             if (fTheta - thetaRange - i * np.pi) <= theta <= (fTheta + thetaRange + i * np.pi):
                 if (fRho - rhoRange) <= rho <= (fRho + rhoRange):
@@ -154,7 +171,6 @@ def HasSimilarLines(line, fLines):
 def GetIntersects(lines, img, oldIntersects):
     # Given 4 lines, finds the best intersects
     intersects = np.ndarray(shape=(0, 2))
-
     if lines != None:
         for i in range(len(lines)):
             for j in range(i + 1, len(lines)):
@@ -169,6 +185,8 @@ def GetIntersects(lines, img, oldIntersects):
 
     intersects = ValidQuadrilateral(intersects)
     if intersects == None:
+        if debugMode:
+            print("No intersects found")
         intersects = oldIntersects
     return intersects
 
@@ -188,10 +206,10 @@ def GetIntersectFromPolar(rho1, theta1, rho2, theta2, img):
 
 def IsOnImage(intersect, img):
     # Check if a point falls on (or just outside of) the image
-    blur = 10
+    blur = 20
     y = img.shape[0]
     x = img.shape[1]
-    if(intersect[0] > (-blur) and intersect[0] < (x + blur) and intersect[1] > (-blur) and intersect[1] < (y + blur)):
+    if((-blur) < intersect[0] < (x + blur) and (-blur) < intersect[1] < (y + blur)):
         return True
     return False
 
@@ -200,29 +218,34 @@ def ValidQuadrilateral(intersects):
 
     # Less than 4 intersects on image: return none
     if (len(intersects) < 4):
-        #print("Less than 4")
+        if debugMode:
+            print("Only %s intersects") % (len(intersects))
         return None
 
     # More than 4 intersects: use the 4 closest
     if (len(intersects) > 4):
+        if debugMode:
+            print("Found %s intersects, choosing closest 4") % (len(intersects))
         intersects = ClosestIntersects(intersects)
 
     # Sort, if sort fails (e.g. 3 intersects in a line): return none
     intersects = SortIntersects(intersects)
     if (len(intersects) < 4):
-        #print("Unsortable")
+        if debugMode:
+            print("Couldn't sort intersects (likely 3 on a line)")
         return None 
 
     # Check if opposing sides are of similar distance
     if not SimilarOpposingSides(intersects):
-        #print("Dissimilar")
+        if debugMode:
+            print("Discarding intersects as opposing sides are dissimilar")
         return None
 
     return intersects
 
 def SimilarOpposingSides(intersects):
     # Check if opposing sides are of similar distance
-    tolerance = 0.1
+    tolerance = 0.12
     distLeft = IntersectDistance(intersects[0], intersects[3])
     distTop = IntersectDistance(intersects[0], intersects[1])
     distRight = IntersectDistance(intersects[1], intersects[2])
@@ -234,16 +257,23 @@ def SimilarOpposingSides(intersects):
     minHeight = meanHeight * (1 - tolerance)
     maxHeight = meanHeight * (1 + tolerance)
     if(distLeft < minHeight or distLeft > maxHeight or distRight < minHeight or distRight > maxHeight):
-        #print("DistLeft: %s DistRight: %s minHeight: %s maxHeight: %s ") % (distLeft, distRight, minHeight, maxHeight)
+        if debugMode:
+            print("distLeft: %s distRight: %s minHeight: %s maxHeight: %s ") % \
+                (distLeft, distRight, minHeight, maxHeight)
         return False
     if(distTop < minWidth or distTop > maxWidth or distBottom < minWidth or distBottom > maxWidth):
-        #print("DistTop: %s DistBottom: %s minWidth: %s maxWidth: %s ") % (distTop, distBottom, minWidth, maxWidth)
+        if debugMode:
+            print("distTop: %s distBottom: %s minWidth: %s maxWidth: %s ") % \
+                (distTop, distBottom, minWidth, maxWidth)
         return False
-    
     return True
 
 def IntersectDistance(intersect1, intersect2):
-    dist = np.sqrt(np.square(intersect1[0] - intersect2[0]) + np.square(intersect1[1] - intersect2[1]))
+    x1 = intersect1[0]
+    x2 = intersect2[0]
+    y1 = intersect1[1]
+    y2 = intersect2[1]
+    dist = np.sqrt(np.square(x1 - x2) + np.square(y1 - y2))
     return dist
 
 def ClosestIntersects(intersects):
@@ -272,18 +302,16 @@ def SortIntersects(its):
     topRight = topIts[topIts[:,1] > np.mean(topIts[:,1])]
     bottomLeft = bottomIts[bottomIts[:,1] < np.mean(bottomIts[:,1])]
     bottomRight = bottomIts[bottomIts[:,1] > np.mean(bottomIts[:,1])]
-    
-    sortedIntersects = np.vstack((sortedIntersects, topLeft, topRight, bottomRight, bottomLeft))
+    sortedTmp = (sortedIntersects, topLeft, topRight, bottomRight, bottomLeft)   
+    sortedIntersects = np.vstack(sortedTmp)
     return sortedIntersects
 
 def DrawLinesOnImage(img, lines, width, color = (255, 255, 255)):
     # Plot lines on an image
-    
     if lines != None:
         for rhotheta in lines:
             rho = rhotheta[0][0]
             theta = rhotheta[0][1]
-
             a = np.cos(theta)
             b = np.sin(theta)
             x0 = a * rho
@@ -297,20 +325,22 @@ def DrawLinesOnImage(img, lines, width, color = (255, 255, 255)):
 
 def DrawIntersectsOnImage(img, intersects, size, width):
     # Plot the intersects on an image
+    color = (255, 255, 255)
     if intersects != None:
         for intersect in intersects:
-            cv2.circle(img, (int(intersect[0]), int(intersect[1])), size, (255, 255, 255), width)
+            y = int(intersect[0])
+            x = int(intersect[1])
+            cv2.circle(img, (y, x), size, color, width)
     return img
 
-def DilateErode(img):
-    # Reduces noise
-    # UNUSED
-    size = 5
+def ErodeDilate(img):
+    # Reduces noise (small / non-uniform areas)
+    size = 10
     img = cv2.erode(img, np.ones((size, size)))
     img = cv2.dilate(img, np.ones((size, size)))
     return img
 
-def PerspectiveTransform(img, its, fullimg):
+def PerspectiveTransform(img, its, fullImg):
     # Transforms an image based on quadrilateral corners (its)
     if len(its) < 4:
         M = SampleM()
@@ -318,50 +348,82 @@ def PerspectiveTransform(img, its, fullimg):
         imgy = img.shape[0]
         imgx = img.shape[1]
         imgRect = np.float32([[0,0],[0,imgx],[imgy,imgx],[imgy,0]])
-        intersectRect = np.float32([[its[0][0], its[0][1]], [its[1][0], its[1][1]], [its[2][0], its[2][1]], [its[3][0], its[3][1]]])
+        y1 = its[0][0]
+        x1 = its[0][1]
+        y2 = its[1][0]
+        x2 = its[1][1]
+        y3 = its[2][0]
+        x3 = its[2][1]
+        y4 = its[3][0]
+        x4 = its[3][1]
+        intersectRect = np.float32([[y1, x1], [y2, x2], [y3, x3], [y4, x4]])
         M = cv2.getPerspectiveTransform(imgRect,intersectRect)
-    
-    rows,cols,clrs = fullimg.shape
-    out = MTransform(img, M, cols, rows)
+
+    out = MTransform(img, M, fullImg)
     return out
 
-def GetFrameFromVideo():
+def GetFrameFromWebcam():
+    # Reads a frame from the webcam
     ret, frame = cap.read()
     frameResized = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
-    # rows, cols, clrs = frame.shape
     return frameResized
+
+def StartTime():
+    # Start timer
+    global frameMillis
+    frameMillis = time.time() * 1000 #%%%
+
+def EndTime():
+    # End timer
+    global globalCounter
+    currentMillis = time.time() * 1000 #%%%
+    globalTimes.append(currentMillis - frameMillis)
+    print(currentMillis - frameMillis)
+    if globalCounter == 250:
+        print globalTimes
+        print np.mean(globalTimes[1:250])
+        print np.std(globalTimes[1:250])
+        exit()
+    globalCounter = globalCounter + 1
+
 
 while(True):
     
-    frame = GetFrameFromVideo()
+    frame = GetFrameFromWebcam()
+    if debugMode:
+        StartTime()
+        print("Frame: %s") % (globalCounter)
     filteredFrame, mask = FilterColor(frame)
-    mask = DilateErode(mask)
-    edgesImg = GetEdges(mask)
+    maskClean = ErodeDilate(mask)
+    edgesImg = GetEdges(maskClean)
     linesBest, linesAll = FindBestLines(edgesImg)
     intersects = GetIntersects(linesBest, frame, intersects)
 
-    #filteredFrame = DrawIntersectsOnImage(filteredFrame, intersects, 10, 2)
     overlayRaw, currentImage = NextOverlay(imagelist, currentImage)
     overlay = PerspectiveTransform(overlayRaw, intersects, frame)
     output = OverlayImage(frame, overlay)
-    #output = OverlayFPS(output)
-    
-    debugFrame = np.copy(filteredFrame)
-    debugFrame = DrawLinesOnImage(debugFrame, linesAll, 1)
-    debugFrame = DrawLinesOnImage(debugFrame, linesBest, 3)
-    #debugFrame = OverlayFPS(debugFrame)
+
+    if debugMode:
+        debugFrame = np.copy(filteredFrame)
+        debugFrame = DrawLinesOnImage(debugFrame, linesAll, 1)
+        debugFrame = DrawLinesOnImage(debugFrame, linesBest, 3)
+        DrawIntersectsOnImage(debugFrame, intersects, 5, 2)
+        debugFrame = OverlayFPS(debugFrame)
 
     # Display the resulting frame
-    #cv2.imshow('filteredFrame', filteredFrame)
-    #cv2.imshow('edgesImg', edgesImg)
     cv2.imshow('output', output)
-    cv2.imshow('debugFrame', debugFrame)
-    #cv2.imshow('mask', mask)
-    #cv2.imshow('strongmask', strongMask)
-    #cv2.imshow('lines',linesimg)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+    
+    if debugMode:
+        EndTime()
+        cv2.imshow('debugFrame', debugFrame)
+        cv2.imwrite('debug-' + str(globalCounter) + '-img.png', output)
+        cv2.imwrite('debug-' + str(globalCounter) + '-dbg.png', debugFrame)
+        if showAllDebugViews:
+            cv2.imshow('mask', mask)
+            cv2.imshow('maskClean', maskClean)
+            cv2.imshow('edgesImg', edgesImg)
+        
 
-# When everything done, release the capture
+#Release the capture
 cap.release()
 cv2.destroyAllWindows()
