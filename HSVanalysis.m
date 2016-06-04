@@ -16,10 +16,9 @@ phue = pinkPts(:, 1);
 psat = pinkPts(:, 2);
 pval = pinkPts(:, 3);
 
-% scatter3(hue, sat, val);
 scatter(pyhue, pysat, 'g');
-%scatter(byhue, bysat, 'b');
-%scatter(phue, psat, 'm');
+scatter(byhue, bysat, 'b');
+scatter(phue, psat, 'm');
 xlim([0 255]);
 ylim([0 255]);
 zlim([0 255]);
@@ -30,22 +29,20 @@ zlabel('Value');
 grid on
 grid minor
 
-%scatter(pyhue, pyval, 'g');
-%scatter(byhue, byval, 'b');
-%scatter(phue, pval, 'm');
-%xlim([0 255]);
-%ylim([0 255]);
-%zlim([0 255]);
-%xlabel('Hue');
-%ylabel('Value');
-%title('Post-it Hue & Value samples');
-%zlabel('Value');
-%grid on
-%grid minor
+pause
 
-%[min(phue)-std(phue) max(phue)+std(phue)]
-%[min(psat)-std(psat) max(psat)+std(psat)]
-%[min(pval)-std(pval) max(pval)+std(pval)]
+scatter(pyhue, pyval, 'g');
+scatter(byhue, byval, 'b');
+scatter(phue, pval, 'm');
+xlim([0 255]);
+ylim([0 255]);
+zlim([0 255]);
+xlabel('Hue');
+ylabel('Value');
+title('Post-it Hue & Value samples');
+zlabel('Value');
+grid on
+grid minor
 
 [min(pyhue)-std(pyhue) max(pyhue)+std(pyhue)]
 [min(pysat)-std(pysat) max(pysat)+std(pysat)]
